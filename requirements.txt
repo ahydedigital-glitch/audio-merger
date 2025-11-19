@@ -1,3 +1,2 @@
 boto3
 ffmpeg-python
-ffmpeg-static
