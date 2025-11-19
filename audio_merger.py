@@ -1,22 +1,24 @@
 import os
 import boto3
 import ffmpeg
-from ffmpeg_static import ffmpeg_path
 import tempfile
 
-# -------------------------------------------------------
-# ENVIRONMENT VARIABLES (set on Render dashboard)
-# -------------------------------------------------------
+# ------------------------------
+# ENVIRONMENT VARIABLES (Render)
+# ------------------------------
+
 S3_ENDPOINT = os.getenv("S3_ENDPOINT")
 S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY")
 S3_SECRET_KEY = os.getenv("S3_SECRET_KEY")
 S3_BUCKET = os.getenv("S3_BUCKET")
-TRACKS_PREFIX = os.getenv("TRACKS_PREFIX", "tracks/")  # folder
+
+TRACKS_PREFIX = os.getenv("TRACKS_PREFIX", "tracks/")
 OUTPUT_KEY = os.getenv("OUTPUT_KEY", "merged-output.mp3")
 
-# -------------------------------------------------------
+# ------------------------------
 # INIT S3 CLIENT (Cloudflare R2)
-# -------------------------------------------------------
+# ------------------------------
+
 s3 = boto3.client(
     "s3",
     endpoint_url=S3_ENDPOINT,
@@ -24,12 +26,12 @@ s3 = boto3.client(
     aws_secret_access_key=S3_SECRET_KEY,
 )
 
-
-# -------------------------------------------------------
+# ------------------------------
 # DOWNLOAD TRACKS
-# -------------------------------------------------------
+# ------------------------------
+
 def download_tracks():
-    print("🔍 Listing MP3 tracks in R2...")
+    print("📥 Listing MP3 tracks in R2...")
 
     resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=TRACKS_PREFIX)
 
@@ -37,69 +39,88 @@ def download_tracks():
         raise Exception("No MP3 files found in bucket folder.")
 
     files = [obj["Key"] for obj in resp["Contents"] if obj["Key"].endswith(".mp3")]
-    files.sort()
 
     if len(files) == 0:
-        raise Exception("Bucket contains zero .mp3 files")
+        raise Exception("Bucket contains zero MP3 files.")
 
-    print(f"🎵 Found {len(files)} files")
+    print(f"📄 Found {len(files)} files")
 
     temp_files = []
 
-    for key in files:
-        local_path = os.path.join(tempfile.gettempdir(), key.replace("/", "_"))
-        print(f"⬇️ Downloading {key}")
-        s3.download_file(S3_BUCKET, key, local_path)
-        temp_files.append(local_path)
+    for key in sorted(files):  
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        print(f"⬇️ Downloading {key} → {tmp.name}")
+
+        s3.download_file(S3_BUCKET, key, tmp.name)
+        temp_files.append(tmp.name)
 
     return temp_files
 
 
-# -------------------------------------------------------
-# MERGE MP3 FILES USING FFMPEG-STATIC
-# -------------------------------------------------------
-def merge_mp3(files, output_path):
-    print("🎛️ Merging MP3 files...")
+# ------------------------------
+# MERGE TRACKS USING FFMPEG
+# ------------------------------
 
-    inputs = [ffmpeg.input(f) for f in files]
+def merge_tracks(temp_files):
+    print("🎶 Merging MP3 files...")
 
-    merged = ffmpeg.concat(*inputs, v=0, a=1).output(output_path)
+    list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt")
 
-    print("⚙️ Running ffmpeg...")
-    ffmpeg.run(merged, cmd=ffmpeg_path)
+    for f in temp_files:
+        list_file.write(f"file '{f}'\n")
 
-    print("✅ Merge complete:", output_path)
+    list_file.close()
 
+    output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
 
-# -------------------------------------------------------
-# UPLOAD FINAL MP3 TO R2
-# -------------------------------------------------------
-def upload_output(output_path):
-    print(f"⬆️ Uploading result as: {OUTPUT_KEY}")
+    (
+        ffmpeg
+        .input(list_file.name, format="concat", safe=0)
+        .output(output_path, c="copy")
+        .run(overwrite_output=True)
+    )
 
-    with open(output_path, "rb") as f:
-        s3.put_object(
-            Bucket=S3_BUCKET,
-            Key=OUTPUT_KEY,
-            Body=f,
-            ContentType="audio/mpeg",
-        )
-
-    print("🎉 Upload complete!")
+    print(f"✅ Merge complete → {output_path}")
+    return output_path
 
 
-# -------------------------------------------------------
-def main():
-    print("🚀 Starting merger…")
-    tracks = download_tracks()
+# ------------------------------
+# UPLOAD MERGED FILE
+# ------------------------------
 
-    output_path = os.path.join(tempfile.gettempdir(), "merged-output.mp3")
+def upload_output(file_path):
+    print(f"📤 Uploading {file_path} to R2 → {OUTPUT_KEY}")
 
-    merge_mp3(tracks, output_path)
-    upload_output(output_path)
+    s3.upload_file(
+        Filename=file_path,
+        Bucket=S3_BUCKET,
+        Key=OUTPUT_KEY,
+        ExtraArgs={"ContentType": "audio/mpeg"}
+    )
 
-    print("🔥 Finished!")
-# -------------------------------------------------------
+    print("✅ Upload complete!")
+
+
+# ------------------------------
+# MAIN
+# ------------------------------
+
+def handler(event=None, context=None):
+    print("🚀 Starting audio merge job...")
+
+    temp_files = download_tracks()
+    merged = merge_tracks(temp_files)
+    upload_output(merged)
+
+    # cleanup
+    for f in temp_files:
+        os.remove(f)
+
+    os.remove(merged)
+
+    print("🎉 Job finished successfully!")
+    return {"status": "ok"}
+
 
 if __name__ == "__main__":
-    main()
+    handler()
