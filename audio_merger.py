@@ -27,8 +27,9 @@ def merge():
         s3.download_file(R2_BUCKET, f, f)
 
     with open("merge_list.txt", "w") as m:
-        for f in input_files:
-            m.write(f"file '{}'\n".format(f))
+    for f in input_files:
+        m.write(f"file '{f}'\n")
+
 
     cmd = [
         "ffmpeg",
