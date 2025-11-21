@@ -3,13 +3,15 @@ services:
     name: audio-merger
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+
+    buildCommand: |
+      apt-get update
+      apt-get install -y ffmpeg
+      pip install --upgrade pip
+      pip install -r requirements.txt
+
     startCommand: python audio_merger.py
-    buildFilter:
-      paths:
-        - "**/*.py"
-        - "requirements.txt"
-        - "render.yaml"
+
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
