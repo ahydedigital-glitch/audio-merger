@@ -23,16 +23,23 @@ def merge():
     input_files = data["files"]
     output_name = data["output"]
 
-    # Download files
+    # Download each file locally (strip folder paths)
+    local_files = []
     for f in input_files:
-        s3.download_file(R2_BUCKET, f, f)
+        local_name = os.path.basename(f)  # Only filename, not the folder path
+        local_files.append(local_name)
 
-    # Create concat list file
+        try:
+            s3.download_file(R2_BUCKET, f, local_name)
+        except Exception as e:
+            return jsonify({"error": f"Cannot download {f}", "details": str(e)}), 400
+
+    # Build the merge list file
     with open("merge_list.txt", "w") as m:
-        for f in input_files:
-            m.write(f"file '{f}'\n")
+        for local_name in local_files:
+            m.write(f"file '{local_name}'\n")
 
-    # Run ffmpeg
+    # Run ffmpeg concat
     cmd = [
         "ffmpeg",
         "-f", "concat",
@@ -42,10 +49,16 @@ def merge():
         output_name
     ]
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        return jsonify({"error": "ffmpeg failed", "details": str(e)}), 500
 
-    # Upload merged file
-    s3.upload_file(output_name, R2_BUCKET, output_name)
+    # Upload merged output back to R2
+    try:
+        s3.upload_file(output_name, R2_BUCKET, output_name)
+    except Exception as e:
+        return jsonify({"error": "Upload failed", "details": str(e)}), 500
 
     return jsonify({
         "status": "success",
