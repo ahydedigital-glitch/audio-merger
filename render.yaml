@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: main
+    name: audio_merger
     env: python
     buildCommand: |
       apt-get update && apt-get install -y ffmpeg
