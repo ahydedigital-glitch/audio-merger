@@ -23,15 +23,16 @@ def merge():
     input_files = data["files"]
     output_name = data["output"]
 
+    # Download files
     for f in input_files:
         s3.download_file(R2_BUCKET, f, f)
 
-with open("merge_list.txt", "w") as m:
-    for f in input_files:
-        m.write(f"file '{f}'\n")
+    # Create concat list file
+    with open("merge_list.txt", "w") as m:
+        for f in input_files:
+            m.write(f"file '{f}'\n")
 
-
-
+    # Run ffmpeg
     cmd = [
         "ffmpeg",
         "-f", "concat",
@@ -43,6 +44,7 @@ with open("merge_list.txt", "w") as m:
 
     subprocess.run(cmd, check=True)
 
+    # Upload merged file
     s3.upload_file(output_name, R2_BUCKET, output_name)
 
     return jsonify({
