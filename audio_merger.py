@@ -1,16 +1,12 @@
-
-+70
--33
-
 import os
 import re
+import shutil
 import tempfile
+from functools import lru_cache
 from typing import Iterable, List
 
 import boto3
 import ffmpeg
-import tempfile
-import sys
 
 # ------------------------------
 # ENVIRONMENT VARIABLES (Render)
@@ -31,26 +27,33 @@ EXPECTED_TRACK_COUNT = int(os.getenv("EXPECTED_TRACK_COUNT", "45"))
 
 def _require_env(value: str, name: str) -> str:
     if not value:
-        raise EnvironmentError(f"Environment variable '{name}' is required")
+        raise EnvironmentError(
+            f"Environment variable '{name}' is required. "
+            "Set it in the Render service environment or render.yaml envVars."
+        )
     return value
 
 
-s3 = boto3.client(
-    "s3",
-    endpoint_url=S3_ENDPOINT,
-    aws_access_key_id=S3_ACCESS_KEY,
-    aws_secret_access_key=S3_SECRET_KEY,
-    endpoint_url=_require_env(S3_ENDPOINT, "S3_ENDPOINT"),
-    aws_access_key_id=_require_env(S3_ACCESS_KEY, "S3_ACCESS_KEY"),
-    aws_secret_access_key=_require_env(S3_SECRET_KEY, "S3_SECRET_KEY"),
-)
+@lru_cache(maxsize=1)
+def _s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=_require_env(S3_ENDPOINT, "S3_ENDPOINT"),
+        aws_access_key_id=_require_env(S3_ACCESS_KEY, "S3_ACCESS_KEY"),
+        aws_secret_access_key=_require_env(S3_SECRET_KEY, "S3_SECRET_KEY"),
+    )
+
+
+def _require_ffmpeg_binary():
+    if not shutil.which("ffmpeg"):
+        raise EnvironmentError(
+            "System ffmpeg binary not found. Ensure ffmpeg is installed in the runtime image."
+        )
 
 # ------------------------------
-# DOWNLOAD TRACKS
 # UTILITIES
 # ------------------------------
 
-def download_tracks():
 def _natural_key(path: str):
     """Return a key that sorts strings with embedded numbers naturally."""
 
@@ -60,7 +63,7 @@ def _natural_key(path: str):
 def _iter_object_keys(prefix: str) -> Iterable[str]:
     """Yield object keys under the given prefix, handling pagination."""
 
-    paginator = s3.get_paginator("list_objects_v2")
+    paginator = _s3_client().get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=_require_env(S3_BUCKET, "S3_BUCKET"), Prefix=prefix):
         for obj in page.get("Contents", []):
             yield obj["Key"]
@@ -69,38 +72,28 @@ def _iter_object_keys(prefix: str) -> Iterable[str]:
 def download_tracks() -> List[str]:
     print("📥 Listing MP3 tracks in R2...")
 
-    resp = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=TRACKS_PREFIX)
     files = [key for key in _iter_object_keys(TRACKS_PREFIX) if key.endswith(".mp3")]
 
-    if "Contents" not in resp:
     if not files:
         raise Exception("No MP3 files found in bucket folder.")
 
-    files = [obj["Key"] for obj in resp["Contents"] if obj["Key"].endswith(".mp3")]
-
-    if len(files) == 0:
-        raise Exception("Bucket contains zero MP3 files.")
     files.sort(key=_natural_key)
 
     print(f"📄 Found {len(files)} files")
 
-    temp_files = []
     if EXPECTED_TRACK_COUNT and len(files) != EXPECTED_TRACK_COUNT:
         raise Exception(
             f"Expected {EXPECTED_TRACK_COUNT} MP3 files but found {len(files)}. "
             "Please verify the upload is complete before merging."
         )
 
-    for key in sorted(files):
     temp_files: List[str] = []
 
     for idx, key in enumerate(files, start=1):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        print(f"⬇️ Downloading {key} → {tmp.name}")
         print(f"⬇️ [{idx}/{len(files)}] Downloading {key} → {tmp.name}")
 
-        s3.download_file(S3_BUCKET, key, tmp.name)
-        s3.download_file(_require_env(S3_BUCKET, "S3_BUCKET"), key, tmp.name)
+        _s3_client().download_file(_require_env(S3_BUCKET, "S3_BUCKET"), key, tmp.name)
         temp_files.append(tmp.name)
 
     return temp_files
@@ -110,7 +103,6 @@ def download_tracks() -> List[str]:
 # MERGE TRACKS USING FFMPEG
 # ------------------------------
 
-def merge_tracks(temp_files):
 def merge_tracks(temp_files: List[str]) -> str:
     print("🎶 Merging MP3 files...")
 
@@ -153,13 +145,11 @@ def merge_tracks(temp_files: List[str]) -> str:
 # UPLOAD MERGED FILE
 # ------------------------------
 
-def upload_output(file_path):
 def upload_output(file_path: str):
     print(f"📤 Uploading final merged file → {OUTPUT_KEY}")
 
-    s3.upload_file(
+    _s3_client().upload_file(
         Filename=file_path,
-        Bucket=S3_BUCKET,
         Bucket=_require_env(S3_BUCKET, "S3_BUCKET"),
         Key=OUTPUT_KEY,
         ExtraArgs={"ContentType": "audio/mpeg"}
@@ -183,23 +173,12 @@ def _cleanup(paths: Iterable[str]):
 def handler(event=None, context=None):
     print("🚀 Starting audio merge job...")
 
-    temp_files = download_tracks()
-    merged = merge_tracks(temp_files)
-    upload_output(merged)
+    _require_ffmpeg_binary()
 
-    # cleanup
-    for f in temp_files:
-        try:
-            os.remove(f)
-        except:
-            pass
     temp_files: List[str] = []
     merged: str = ""
 
     try:
-        os.remove(merged)
-    except:
-        pass
         temp_files = download_tracks()
         merged = merge_tracks(temp_files)
         upload_output(merged)
