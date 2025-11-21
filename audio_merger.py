@@ -2,6 +2,7 @@ import os
 import boto3
 import ffmpeg
 import tempfile
+import sys
 
 # ------------------------------
 # ENVIRONMENT VARIABLES (Render)
@@ -38,7 +39,10 @@ def download_tracks():
     if "Contents" not in resp:
         raise Exception("No MP3 files found in bucket folder.")
 
-    files = [obj["Key"] for obj in resp["Contents"] if obj["Key"].endswith(".mp3")]
+    files = [
+        obj["Key"] for obj in resp["Contents"]
+        if obj["Key"].endswith(".mp3")
+    ]
 
     if len(files) == 0:
         raise Exception("Bucket contains zero MP3 files.")
@@ -47,10 +51,9 @@ def download_tracks():
 
     temp_files = []
 
-    for key in sorted(files):  
+    for key in sorted(files):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         print(f"⬇️ Downloading {key} → {tmp.name}")
-
         s3.download_file(S3_BUCKET, key, tmp.name)
         temp_files.append(tmp.name)
 
@@ -64,21 +67,29 @@ def download_tracks():
 def merge_tracks(temp_files):
     print("🎶 Merging MP3 files...")
 
+    # Build the concat list file
     list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt")
-
     for f in temp_files:
         list_file.write(f"file '{f}'\n")
-
     list_file.close()
 
     output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
 
-    (
-        ffmpeg
-        .input(list_file.name, format="concat", safe=0)
-        .output(output_path, c="copy")
-        .run(overwrite_output=True)
-    )
+    try:
+        (
+            ffmpeg
+            .input(list_file.name, format="concat", safe=0)
+            .output(output_path, c="copy")
+            .run(overwrite_output=True)
+        )
+
+    except ffmpeg.Error as e:
+        print("\n❌ FFMPEG MERGE FAILED")
+        print("---- STDOUT ----")
+        print(e.stdout.decode() if e.stdout else "")
+        print("---- STDERR ----")
+        print(e.stderr.decode() if e.stderr else "")
+        raise Exception("FFMPEG merge failed — see logs above")
 
     print(f"✅ Merge complete → {output_path}")
     return output_path
@@ -89,7 +100,7 @@ def merge_tracks(temp_files):
 # ------------------------------
 
 def upload_output(file_path):
-    print(f"📤 Uploading {file_path} to R2 → {OUTPUT_KEY}")
+    print(f"📤 Uploading final merged file → {OUTPUT_KEY}")
 
     s3.upload_file(
         Filename=file_path,
@@ -102,7 +113,7 @@ def upload_output(file_path):
 
 
 # ------------------------------
-# MAIN
+# MAIN HANDLER
 # ------------------------------
 
 def handler(event=None, context=None):
@@ -114,9 +125,15 @@ def handler(event=None, context=None):
 
     # cleanup
     for f in temp_files:
-        os.remove(f)
+        try:
+            os.remove(f)
+        except:
+            pass
 
-    os.remove(merged)
+    try:
+        os.remove(merged)
+    except:
+        pass
 
     print("🎉 Job finished successfully!")
     return {"status": "ok"}
