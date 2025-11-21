@@ -39,10 +39,7 @@ def download_tracks():
     if "Contents" not in resp:
         raise Exception("No MP3 files found in bucket folder.")
 
-    files = [
-        obj["Key"] for obj in resp["Contents"]
-        if obj["Key"].endswith(".mp3")
-    ]
+    files = [obj["Key"] for obj in resp["Contents"] if obj["Key"].endswith(".mp3")]
 
     if len(files) == 0:
         raise Exception("Bucket contains zero MP3 files.")
@@ -54,6 +51,7 @@ def download_tracks():
     for key in sorted(files):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         print(f"⬇️ Downloading {key} → {tmp.name}")
+
         s3.download_file(S3_BUCKET, key, tmp.name)
         temp_files.append(tmp.name)
 
@@ -67,10 +65,11 @@ def download_tracks():
 def merge_tracks(temp_files):
     print("🎶 Merging MP3 files...")
 
-    # Build the concat list file
     list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt")
+
     for f in temp_files:
         list_file.write(f"file '{f}'\n")
+
     list_file.close()
 
     output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
@@ -80,16 +79,16 @@ def merge_tracks(temp_files):
             ffmpeg
             .input(list_file.name, format="concat", safe=0)
             .output(output_path, c="copy")
-            .run(overwrite_output=True)
+            .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
         )
 
     except ffmpeg.Error as e:
-        print("\n❌ FFMPEG MERGE FAILED")
+        print("❌ FFMPEG MERGE FAILED")
         print("---- STDOUT ----")
-        print(e.stdout.decode() if e.stdout else "")
+        print(e.stdout.decode('utf-8') if e.stdout else "NO STDOUT")
         print("---- STDERR ----")
-        print(e.stderr.decode() if e.stderr else "")
-        raise Exception("FFMPEG merge failed — see logs above")
+        print(e.stderr.decode('utf-8') if e.stderr else "NO STDERR")
+        raise Exception("FFMPEG merge failed. See logs above.")
 
     print(f"✅ Merge complete → {output_path}")
     return output_path
