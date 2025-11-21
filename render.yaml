@@ -13,5 +13,19 @@ services:
     startCommand: python audio_merger.py
 
     envVars:
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: TRACKS_PREFIX
+        sync: false
+      - key: OUTPUT_KEY
+        sync: false
+      - key: EXPECTED_TRACK_COUNT
+        sync: false
       - key: PYTHONUNBUFFERED
         value: "1"
