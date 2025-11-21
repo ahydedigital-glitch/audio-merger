@@ -26,9 +26,10 @@ def merge():
     for f in input_files:
         s3.download_file(R2_BUCKET, f, f)
 
-    with open("merge_list.txt", "w") as m:
+with open("merge_list.txt", "w") as m:
     for f in input_files:
         m.write(f"file '{f}'\n")
+
 
 
     cmd = [
