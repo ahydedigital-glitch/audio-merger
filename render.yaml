@@ -2,7 +2,10 @@ services:
   - type: web
     name: audio-merger
     env: python
-    buildCommand: |
-      apt-get update && apt-get install -y ffmpeg
-      pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    buildCommand: pip install -r requirements.txt
+    startCommand: python src/audio_merger.py
+    buildFilter:
+      paths:
+        - "**/*.py"
+        - "**/requirements.txt"
+        - "**/render.yaml"
